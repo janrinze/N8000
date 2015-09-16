@@ -1805,7 +1805,20 @@ static void mxt_handle_init_data(struct mxt_data *data)
 	else
 		data->tsp_ctrl = (val > 0) ? val : 0x83;
 
-	dev_info(&data->client->dev, "T9 CTRL : %d", data->tsp_ctrl);
+	mxt_write_object(data, TOUCH_MULTITOUCHSCREEN_T9,
+			MXT_T9_CTRL, data->tsp_ctrl);
+	dev_info(&data->client->dev, "T9 CTRL : %d\n", data->tsp_ctrl);
+
+	/* Get num of x,y lines that object occupies */
+	ret = mxt_read_object(data, TOUCH_MULTITOUCHSCREEN_T9,
+		MXT_T9_X_SIZE, &val);
+	data->x_num = val;
+
+	ret = mxt_read_object(data, TOUCH_MULTITOUCHSCREEN_T9,
+		MXT_T9_Y_SIZE, &val);
+	data->y_num = val;
+	dev_info(&data->client->dev, "occupied matrix X,Y size:  %d,%d\n",
+		data->x_num, data->y_num);
 }
 
 int  mxt_rest_initialize(struct mxt_fw_info *fw_info)

@@ -37,6 +37,13 @@
 #include <linux/cyttsp4_core.h>
 #include "cyttsp4_regs.h"
 
+#define SAMSUNG_CALIBRATION
+#ifdef SAMSUNG_CALIBRATION
+#define SAMSUNG_HW_VERSION			0x03
+#define SAMSUNG_FW_VERSION			0x0600
+#define SAMSUNG_CONFIG_VERSION		0x06
+#endif
+
 #define CYTTSP4_LOADER_NAME "cyttsp4_loader"
 #define CYTTSP4_AUTO_LOAD_FOR_CORRUPTED_FW 1
 
@@ -102,6 +109,9 @@ struct cyttsp4_loader_data {
 	u8 status_buf[CY_MAX_STATUS_SIZE];
 	struct completion int_running;
 	struct work_struct fw_upgrade;
+#ifdef SAMSUNG_CALIBRATION
+	struct work_struct calibration_work;
+#endif
 };
 
 struct cyttsp4_dev_id {
@@ -751,6 +761,52 @@ _cyttsp4_load_app_exit:
  *  0: Do not upgrade firmware
  * !0: Do a firmware upgrade
  */
+#ifdef SAMSUNG_SYSINFO_DATA
+/* Samsung specific version checking function */
+static int cyttsp4_check_version_(struct cyttsp4_device *ttsp, u32 fw_ver_new,
+		u32 fw_revctrl_new_h, u32 fw_revctrl_new_l)
+{
+	struct device *dev = &ttsp->dev;
+	struct cyttsp4_loader_data *data = dev_get_drvdata(dev);
+	u16 fw_ver_img;
+	u8 hw_ver_img;
+	u8 config_ver_img;
+
+	hw_ver_img = data->si->si_ptrs.samsung_data->hw_version;
+	fw_ver_img = data->si->si_ptrs.samsung_data->fw_versionh <<  8;
+	fw_ver_img += data->si->si_ptrs.samsung_data->fw_versionl;
+	config_ver_img = data->si->si_ptrs.samsung_data->config_version;
+
+	dev_dbg(dev, "%s: img hw vers:0x%01X new hw vers:0x%01X\n", __func__,
+			hw_ver_img, SAMSUNG_HW_VERSION);
+	dev_dbg(dev, "%s: img fw vers:0x%02X new fw vers:0x%02X\n", __func__,
+			fw_ver_img, SAMSUNG_FW_VERSION);
+	dev_dbg(dev, "%s: img config vers:0x%01X new config vers:0x%01X\n",
+		__func__, config_ver_img, SAMSUNG_CONFIG_VERSION);
+
+	if (SAMSUNG_HW_VERSION > hw_ver_img) {
+		dev_dbg(dev, "%s: hw version is newer, will NOT upgrade\n",
+				__func__);
+		return 0;
+	}
+
+	if (SAMSUNG_FW_VERSION > fw_ver_img) {
+		dev_dbg(dev, "%s: Image is newer, will upgrade\n",
+				__func__);
+		return 1;
+	}
+
+	if (SAMSUNG_CONFIG_VERSION > config_ver_img) {
+		dev_dbg(dev, "%s: Image is newer, will upgrade\n",
+				__func__);
+		return 1;
+	}
+
+	/* equal */
+	dev_dbg(dev, "%s: Image is equal, will NOT upgrade\n", __func__);
+	return 0;
+}
+#else
 static int cyttsp4_check_version_(struct cyttsp4_device *ttsp, u32 fw_ver_new,
 		u32 fw_revctrl_new_h, u32 fw_revctrl_new_l)
 {
@@ -759,9 +815,6 @@ static int cyttsp4_check_version_(struct cyttsp4_device *ttsp, u32 fw_ver_new,
 	u32 fw_ver_img;
 	u32 fw_revctrl_img_h;
 	u32 fw_revctrl_img_l;
-#if defined(CONFIG_MACH_BAFFIN)
-	int fw_update = 0;
-#endif
 
 	fw_ver_img = data->si->si_ptrs.cydata->fw_ver_major << 8;
 	fw_ver_img += data->si->si_ptrs.cydata->fw_ver_minor;
@@ -772,21 +825,13 @@ static int cyttsp4_check_version_(struct cyttsp4_device *ttsp, u32 fw_ver_new,
 	if (fw_ver_new > fw_ver_img) {
 		dev_dbg(dev, "%s: Image is newer, will upgrade\n",
 				__func__);
-#if defined(CONFIG_MACH_BAFFIN)
-		fw_update++;
-#else
 		return 1;
-#endif
 	}
 
 	if (fw_ver_new < fw_ver_img) {
 		dev_dbg(dev, "%s: Image is older, will NOT upgrade\n",
 				__func__);
-#if defined(CONFIG_MACH_BAFFIN)
-
-#else
 		return 0;
-#endif
 	}
 
 	fw_revctrl_img_h = be32_to_cpu(
@@ -798,21 +843,13 @@ static int cyttsp4_check_version_(struct cyttsp4_device *ttsp, u32 fw_ver_new,
 	if (fw_revctrl_new_h > fw_revctrl_img_h) {
 		dev_dbg(dev, "%s: Image is newer, will upgrade\n",
 				__func__);
-#if defined(CONFIG_MACH_BAFFIN)
-		fw_update++;
-#else
 		return 1;
-#endif
 	}
 
 	if (fw_revctrl_new_h < fw_revctrl_img_h) {
 		dev_dbg(dev, "%s: Image is older, will NOT upgrade\n",
 				__func__);
-#if defined(CONFIG_MACH_BAFFIN)
-
-#else
 		return 0;
-#endif
 	}
 
 	fw_revctrl_img_l = be32_to_cpu(
@@ -824,39 +861,20 @@ static int cyttsp4_check_version_(struct cyttsp4_device *ttsp, u32 fw_ver_new,
 	if (fw_revctrl_new_l > fw_revctrl_img_l) {
 		dev_dbg(dev, "%s: Image is newer, will upgrade\n",
 				__func__);
-#if defined(CONFIG_MACH_BAFFIN)
-		fw_update++;
-#else
 		return 1;
-#endif
 	}
 
 	if (fw_revctrl_new_l < fw_revctrl_img_l) {
 		dev_dbg(dev, "%s: Image is older, will NOT upgrade\n",
 				__func__);
-#if defined(CONFIG_MACH_BAFFIN)
-
-#else
-		return 0;
-#endif
-	}
-
-	printk("%s -Part_fw_ver_img : 0x%X,  Phone_fw_ver_new : 0x%X\n", __func__, fw_ver_img, fw_ver_new);
-	printk("%s -Part_fw_revctrl_img_h : 0x%X,  Phone_fw_revctrl_new_h : 0x%X\n", __func__, fw_revctrl_img_h, fw_revctrl_new_h);
-	printk("%s -Part_fw_revctrl_img_l : 0x%X,  Phone_fw_revctrl_new_l : 0x%X\n", __func__, fw_revctrl_img_l, fw_revctrl_new_l);
-
-#if defined(CONFIG_MACH_BAFFIN)
-	if (fw_update > 0 && fw_revctrl_img_l >= 0x5ECEB)
-		return 1;
-	else
-#endif
-	{
-		/* equal */
-		dev_dbg(dev, "%s: Image is equal, will NOT upgrade\n", __func__);
 		return 0;
 	}
 
+	/* equal */
+	dev_dbg(dev, "%s: Image is equal, will NOT upgrade\n", __func__);
+	return 0;
 }
+#endif
 
 static int cyttsp4_check_version_platform(struct cyttsp4_device *ttsp,
 		struct cyttsp4_touch_firmware *fw)
@@ -882,6 +900,153 @@ static int cyttsp4_check_version_platform(struct cyttsp4_device *ttsp,
 		fw_revctrl_new_h, fw_revctrl_new_l);
 }
 
+#ifdef SAMSUNG_CALIBRATION
+static void cyttsp4_fw_calibrate(struct work_struct *calibration_work)
+{
+	struct cyttsp4_loader_data *data = container_of(calibration_work,
+			struct cyttsp4_loader_data, calibration_work);
+	struct cyttsp4_device *ttsp = data->ttsp;
+	struct device *dev = &ttsp->dev;
+	u8 cmd_buf[4], return_buf[2];
+	int rc, rc2, rc3;
+
+	dev_vdbg(dev, "%s\n", __func__);
+
+	pm_runtime_get_sync(dev);
+
+	dev_vdbg(dev, "%s: Requesting exclusive\n", __func__);
+	rc = cyttsp4_request_exclusive(ttsp, 5000);
+	if (rc < 0) {
+		dev_err(dev, "%s: Error on request exclusive r=%d\n",
+				__func__, rc);
+		goto exit;
+	}
+
+	dev_vdbg(dev, "%s: Requesting mode change to CAT\n", __func__);
+	rc = cyttsp4_request_set_mode(ttsp, CY_MODE_CAT);
+	if (rc < 0) {
+		dev_err(dev, "%s: Error on request set mode r=%d\n",
+				__func__, rc);
+		goto exit_release;
+	}
+
+
+	cmd_buf[0] = CY_CMD_CAT_CALIBRATE_IDACS;
+	cmd_buf[1] = 0x00; /* Mutual Capacitance Screen */
+	rc = cyttsp4_request_exec_cmd(ttsp, CY_MODE_CAT,
+			cmd_buf, 2, return_buf, 1, 5000);
+	if (rc < 0) {
+		dev_err(dev, "%s: Unable to execute calibrate command.\n",
+			__func__);
+		goto exit_setmode;
+	}
+	if (return_buf[0] != 0) {
+		dev_err(dev, "%s: calibrate command unsuccessful\n", __func__);
+		goto exit_setmode;
+	}
+
+	cmd_buf[1] = 0x01; /* Mutual Capacitance Button */
+	rc = cyttsp4_request_exec_cmd(ttsp, CY_MODE_CAT,
+			cmd_buf, 2, return_buf, 1, 5000);
+	if (rc < 0) {
+		dev_err(dev, "%s: Unable to execute calibrate command.\n",
+			__func__);
+		goto exit_setmode;
+	}
+	if (return_buf[0] != 0) {
+		dev_err(dev, "%s: calibrate command unsuccessful\n", __func__);
+		goto exit_setmode;
+	}
+
+	cmd_buf[1] = 0x02; /* Self Capacitance */
+	rc = cyttsp4_request_exec_cmd(ttsp, CY_MODE_CAT,
+			cmd_buf, 2, return_buf, 1, 5000);
+	if (rc < 0) {
+		dev_err(dev, "%s: Unable to execute calibrate command.\n",
+			__func__);
+		goto exit_setmode;
+	}
+	if (return_buf[0] != 0) {
+		dev_err(dev, "%s: calibrate command unsuccessful\n", __func__);
+		goto exit_setmode;
+	}
+
+exit_setmode:
+	rc2 = cyttsp4_request_set_mode(ttsp, CY_MODE_OPERATIONAL);
+	if (rc2 < 0)
+		dev_err(dev, "%s: Error on request set mode 2 r=%d\n",
+				__func__, rc2);
+
+exit_release:
+	rc3 = cyttsp4_release_exclusive(ttsp);
+	if (rc3 < 0)
+		dev_err(dev, "%s: Error on release exclusive r=%d\n",
+				__func__, rc3);
+
+exit:
+	pm_runtime_put(dev);
+}
+
+static int cyttsp4_fw_calibration_attention(struct cyttsp4_device *ttsp)
+{
+	struct device *dev = &ttsp->dev;
+	struct cyttsp4_loader_data *data = dev_get_drvdata(dev);
+	int rc = 0;
+
+	dev_vdbg(dev, "%s\n", __func__);
+
+	schedule_work(&data->calibration_work);
+
+	cyttsp4_unsubscribe_attention(ttsp, CY_ATTEN_IRQ,
+		cyttsp4_fw_calibration_attention, CY_MODE_OPERATIONAL);
+
+	return rc;
+}
+
+#endif
+
+static int cyttsp4_upgrade_firmware(struct cyttsp4_device *ttsp,
+		const u8 *fw_img, int fw_size)
+{
+	struct device *dev = &ttsp->dev;
+	int rc;
+
+	printk(KERN_INFO "%s: ttsp=%p\n", __func__, ttsp);
+
+	pm_runtime_get_sync(dev);
+
+	rc = cyttsp4_request_exclusive(ttsp, 5000);
+	if (rc < 0)
+		goto exit;
+
+	rc = _cyttsp4_load_app(ttsp, fw_img, fw_size);
+	if (rc < 0) {
+		dev_err(dev, "%s: FBL Firmware update failed with error code %d\n",
+			__func__, rc);
+#ifdef SAMSUNG_CALIBRATION
+	} else {
+		/* set up touch call back */
+		dev_vdbg(dev, "%s: Adding callback for calibration\n",
+			__func__);
+		rc = cyttsp4_subscribe_attention(ttsp, CY_ATTEN_IRQ,
+				cyttsp4_fw_calibration_attention,
+				CY_MODE_OPERATIONAL);
+		if (rc) {
+			dev_err(dev, "%s: Failed adding callback for calibration, no calibration will be performed\n",
+					__func__);
+			rc = 0;
+		}
+#endif
+	}
+
+	cyttsp4_release_exclusive(ttsp);
+	cyttsp4_request_restart(ttsp);
+
+exit:
+	pm_runtime_put(dev);
+	return rc;
+}
+
 static int upgrade_from_platform_firmware(struct cyttsp4_device *ttsp,
 		struct cyttsp4_touch_firmware *fw)
 {
@@ -905,28 +1070,12 @@ static int upgrade_from_platform_firmware(struct cyttsp4_device *ttsp,
 		return rc;
 	}
 
-	pm_runtime_get_sync(dev);
-
 	upgrade = cyttsp4_check_version_platform(ttsp, fw);
+
 	if (!upgrade)
-		goto exit;
+		return rc;
 
-	rc = cyttsp4_request_exclusive(ttsp, 5000);
-	if (rc < 0)
-		goto exit;
-
-	rc = _cyttsp4_load_app(ttsp, fw->img, fw->size);
-	if (rc < 0) {
-		dev_err(dev, "%s: FBL Firmware update failed with error code %d\n",
-			__func__, rc);
-	}
-
-	cyttsp4_release_exclusive(ttsp);
-	cyttsp4_request_restart(ttsp);
-
-exit:
-	pm_runtime_put(dev);
-	return rc;
+	return cyttsp4_upgrade_firmware(ttsp, fw->img, fw->size);
 }
 
 #ifdef CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP4_USE_FW_BIN_FILE
@@ -975,6 +1124,9 @@ static void _cyttsp4_firmware_cont(const struct firmware *fw, void *context)
 		goto cyttsp4_firmware_cont_release_exit;
 	}
 
+	cyttsp4_upgrade_firmware(ttsp, &(fw->data[header_size + 1]),
+		fw->size - (header_size + 1));
+#if 0
 	pm_runtime_get_sync(dev);
 
 	retval = cyttsp4_request_exclusive(ttsp, 5000);
@@ -994,6 +1146,7 @@ static void _cyttsp4_firmware_cont(const struct firmware *fw, void *context)
 
 cyttsp4_firmware_cont_release_exit:
 	pm_runtime_put(dev);
+#endif
 	release_firmware(fw);
 	_start_fw_class(ttsp, _cyttsp4_firmware_cont);
 
@@ -1117,6 +1270,16 @@ static void cyttsp4_fw_upgrade(struct work_struct *fw_upgrade)
 #endif
 }
 
+static int cyttsp4_load_func(struct cyttsp4_device *ttsp,
+		struct cyttsp4_touch_firmware *fw)
+{
+#ifdef SAMSUNG_SYSINFO_DATA
+	if (cyttsp4_check_version_(ttsp, 0, 0, 0))
+		return cyttsp4_upgrade_firmware(ttsp, fw->img, fw->size);
+#endif
+		return 0;
+}
+
 static int cyttsp4_loader_probe(struct cyttsp4_device *ttsp)
 {
 	struct cyttsp4_loader_data *data;
@@ -1137,8 +1300,12 @@ static int cyttsp4_loader_probe(struct cyttsp4_device *ttsp)
 	pm_runtime_enable(dev);
 	pm_runtime_get_sync(dev);
 	cyttsp4_subscribe_attention(ttsp, CY_ATTEN_IRQ,
-		cyttsp4_loader_attention, CY_MODE_BOOTLOADER);
+	cyttsp4_loader_attention, CY_MODE_BOOTLOADER);
+	cyttsp4_set_loader(ttsp, cyttsp4_load_func);
 	INIT_WORK(&data->fw_upgrade, cyttsp4_fw_upgrade);
+#ifdef SAMSUNG_CALIBRATION
+	INIT_WORK(&data->calibration_work, cyttsp4_fw_calibrate);
+#endif
 	schedule_work(&data->fw_upgrade);
 	pm_runtime_put(dev);
 	dev_info(dev, "%s: Successful probe %s\n", __func__, ttsp->name);
@@ -1163,6 +1330,7 @@ static int cyttsp4_loader_release(struct cyttsp4_device *ttsp)
 			"%s: Failed to restart IC with error code %d\n",
 			__func__, retval);
 	}
+	cyttsp4_unset_loader(ttsp);
 	pm_runtime_suspend(dev);
 	pm_runtime_disable(dev);
 	dev_set_drvdata(dev, NULL);

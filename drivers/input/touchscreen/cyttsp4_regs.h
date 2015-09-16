@@ -33,6 +33,9 @@
 #ifndef _CYTTSP4_REGS_H
 #define _CYTTSP4_REGS_H
 
+/* Used to obtain Samsung related FW/HW/Configuration data */
+#define SAMSUNG_SYSINFO_DATA
+
 #define CY_FW_FILE_NAME "cyttsp4_fw.bin"
 
 #define CY_MAX_PRBUF_SIZE           PIPE_BUF
@@ -61,7 +64,12 @@
 #define CY_REG_CAT_CMD              2
 #define CY_CMD_COMPLETE_MASK        (1 << 6)
 #define CY_CMD_MASK                 0x3F
-#define CY_EBID                     0
+
+enum cyttsp4_ic_ebid {
+	CY_TCH_PARM_EBID,
+	CY_MDATA_EBID,
+	CY_DDATA_EBID,
+};
 
 /* touch record system information offset masks and shifts */
 #define CY_BYTE_OFS_MASK            0x1F
@@ -69,6 +77,7 @@
 #define CY_BOFS_SHIFT               5
 
 #define CY_REQUEST_EXCLUSIVE_TIMEOUT	500
+#define CY_COMMAND_COMPLETE_TIMEOUT	500
 
 /* maximum number of concurrent tracks */
 #define CY_NUM_TCH_ID               10
@@ -81,12 +90,18 @@
 #define IS_BAD_PKT(x)               ((x) & 0x20)
 
 #define CY_WATCHDOG_TIMEOUT msecs_to_jiffies(1000)
+#define CY_WATCHDOG_TIMEOUT2 msecs_to_jiffies(3000)
+#define CY_WATCHDOG_TIMEOUT3 msecs_to_jiffies(20000)
 
 /* drv_debug commands */
 #define CY_DBG_SUSPEND                  4
 #define CY_DBG_RESUME                   5
 #define CY_DBG_SOFT_RESET               97
 #define CY_DBG_RESET                    98
+
+#ifdef SAMSUNG_SYSINFO_DATA
+#define SAMSUNG_DATA_OFFSET     0x70
+#endif
 
 enum cyttsp4_hst_mode_bits {
 	CY_HST_TOGGLE      = (1 << 7),
@@ -355,6 +370,28 @@ struct cyttsp4_sysinfo_data {
 	u8 mdata_ofsl;
 } __packed;
 
+#ifdef SAMSUNG_SYSINFO_DATA
+struct cyttsp4_samsung_data {
+	u8 ic_vendorh;
+	u8 ic_vendorl;
+	u8 module_vendorh;
+	u8 module_vendorl;
+	u8 hw_version;
+	u8 fw_versionh;
+	u8 fw_versionl;
+	u8 config_version;
+	u8 ic_series;
+	u8 num_sensor_x;
+	u8 num_sensor_y;
+	u8 resolution_xh;
+	u8 resolution_xl;
+	u8 resolution_yh;
+	u8 resolution_yl;
+	u8 button_info;
+	u8 set_comb_info;
+} __packed;
+#endif
+
 struct cyttsp4_sysinfo_ptr {
 	struct cyttsp4_cydata *cydata;
 	struct cyttsp4_test *test;
@@ -362,6 +399,9 @@ struct cyttsp4_sysinfo_ptr {
 	struct cyttsp4_opcfg *opcfg;
 	struct cyttsp4_ddata *ddata;
 	struct cyttsp4_mdata *mdata;
+#ifdef SAMSUNG_SYSINFO_DATA
+	struct cyttsp4_samsung_data *samsung_data;
+#endif
 } __packed;
 
 struct cyttsp4_touch {
@@ -410,6 +450,9 @@ struct cyttsp4_sysinfo_ofs {
 	size_t ddata_size;
 	size_t mdata_size;
 	size_t btn_keys_size;
+#ifdef SAMSUNG_SYSINFO_DATA
+	size_t samsung_data_size;
+#endif
 	struct cyttsp4_tch_abs_params tch_abs[CY_TCH_NUM_ABS];
 	size_t btn_rec_size; /* btn record size (in bytes) */
 	size_t btn_diff_ofs;/* btn data loc ,diff counts, (Op-Mode byte ofs) */

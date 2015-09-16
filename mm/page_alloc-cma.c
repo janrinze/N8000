@@ -1156,7 +1156,7 @@ static struct page *__rmqueue_cma(struct zone *zone, unsigned int order,
 
 	if (migratetype == MIGRATE_MOVABLE && !zone->cma_alloc)
 		page = __rmqueue_smallest(zone, order, MIGRATE_CMA);
-	else
+	if (!page)
 retry_reserve :
 		page = __rmqueue_smallest(zone, order, migratetype);
 
@@ -2364,8 +2364,12 @@ __alloc_pages_slowpath(gfp_t gfp_mask, unsigned int order,
 	unsigned long did_some_progress;
 	bool sync_migration = false;
 #ifdef CONFIG_ANDROID_WIP
-	unsigned long start_tick = jiffies;
-#endif
+#ifdef CONFIG_SEC_OOM_KILLER
+	unsigned long oom_invoke_timeout = jiffies + HZ/4;
+#else
+	unsigned long oom_invoke_timeout = jiffies + HZ;
+#endif /* CONFIG_SEC_OOM_KILLER */
+#endif /* CONFIG_ANDROID_WIP */
 
 	/*
 	 * In the slowpath, we sanity check order to avoid ever trying to
@@ -2470,7 +2474,7 @@ rebalance:
 	 * ANDROID_WIP: If we are looping more than 1 second, consider OOM
 	 */
 #ifdef CONFIG_ANDROID_WIP
-#define SHOULD_CONSIDER_OOM (!did_some_progress || time_after(jiffies, start_tick + HZ))
+#define SHOULD_CONSIDER_OOM !did_some_progress || time_after(jiffies, oom_invoke_timeout)
 #else
 #define SHOULD_CONSIDER_OOM (!did_some_progress)
 #endif
@@ -2481,7 +2485,7 @@ rebalance:
 #ifdef CONFIG_ANDROID_WIP
 			if (did_some_progress)
 				pr_info("time's up : calling "
-						"__alloc_pages_may_oom\n");
+					"__alloc_pages_may_oom(o:%d, gfp:0x%x)\n", order, gfp_mask);
 #endif
 			page = __alloc_pages_may_oom(gfp_mask, order,
 					zonelist, high_zoneidx,
@@ -2508,6 +2512,9 @@ rebalance:
 					goto nopage;
 			}
 
+#ifdef CONFIG_SEC_OOM_KILLER
+			oom_invoke_timeout = jiffies + HZ/4;
+#endif
 			goto restart;
 		}
 
@@ -5324,6 +5331,7 @@ static int page_alloc_cpu_notify(struct notifier_block *self,
 	int cpu = (unsigned long)hcpu;
 
 	if (action == CPU_DEAD || action == CPU_DEAD_FROZEN) {
+		lru_add_drain_cpu(cpu);
 		drain_pages(cpu);
 
 		/*
@@ -5522,6 +5530,7 @@ void setup_per_zone_wmarks(void)
  */
 static void __meminit calculate_zone_inactive_ratio(struct zone *zone)
 {
+#ifndef CONFIG_ZSWAP
 	unsigned int gb, ratio;
 
 	/* Zone size in gigabytes */
@@ -5532,6 +5541,9 @@ static void __meminit calculate_zone_inactive_ratio(struct zone *zone)
 		ratio = 1;
 
 	zone->inactive_ratio = ratio;
+#else
+	zone->inactive_ratio = 1;
+#endif
 }
 
 static void __meminit setup_per_zone_inactive_ratio(void)
@@ -6046,7 +6058,7 @@ static int __alloc_contig_migrate_range(unsigned long start, unsigned long end)
 			failed_pages[i][j] = NULL;
 	}
 
-	migrate_prep_local();
+	migrate_prep();
 
 	while (pfn < end || !list_empty(&cc.migratepages)) {
 		if (fatal_signal_pending(current)) {
@@ -6186,7 +6198,6 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 		goto done;
 	}
 
-	drain_all_pages();
 	zone->cma_alloc = 1;
 
 migrate:
@@ -6215,22 +6226,23 @@ migrate:
 	 * isolated thus they won't get removed from buddy.
 	 */
 
-	outer_start = start;
-	for (order = 0; order < MAX_ORDER; ++order) {
-		unsigned long pfn = start & (~0UL << order);
-		struct page *page = pfn_to_page(pfn);
+	lru_add_drain_all();
+	drain_all_pages();
 
-		if (PageBuddy(page)) {
-			if (page_order(page) >= order)
-				outer_start = pfn;
-			break;
+	order = 0;
+	outer_start = start;
+	while (!PageBuddy(pfn_to_page(outer_start))) {
+		if (++order >= MAX_ORDER) {
+			ret = -EBUSY;
+			goto done;
 		}
+		outer_start &= ~0UL << order;
 	}
 
 	/* Make sure the range is really isolated. */
 	if (test_pages_isolated(outer_start, end)) {
-		printk(KERN_ERR "%s: test_pages_isolated(%lx, %lx) failed\n",
-					__func__, outer_start, end);
+		pr_warn("alloc_contig_range test_pages_isolated(%lx, %lx) failed\n",
+			outer_start, end);
 		ret = -EBUSY;
 		goto done;
 	}
@@ -6245,8 +6257,6 @@ migrate:
 	outer_end = isolate_freepages_range(outer_start, end, true);
 	if (!outer_end) {
 		ret = -EBUSY;
-		printk(KERN_ERR "%s : isolate_freepages_range failed %lu\n",
-				 __func__, outer_end);
 		goto done;
 	}
 
@@ -6257,7 +6267,7 @@ migrate:
 		free_contig_range(end, outer_end - end);
 
 done:
-	if ((ret == -EBUSY || ret == -EAGAIN) && retry++ < 5) {
+	if ((ret == -EBUSY || ret == -EAGAIN) && retry++ < 10) {
 		unsigned long count, cf;
 		/* FIXME kmpark: temporaily drop the cma free pages */
 		count = zone_page_state(zone, NR_FREE_CMA_PAGES);

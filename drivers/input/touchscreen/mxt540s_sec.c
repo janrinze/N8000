@@ -31,6 +31,14 @@ static void not_support_cmd(void *device_data)
 				buff, strnlen(buff, sizeof(buff)));
 }
 
+static bool check_xy_range(struct mxt_data *data, u16 node)
+{
+	u8 x_line = node / data->info.matrix_ysize;
+	u8 y_line = node % data->info.matrix_ysize;
+	return (y_line < data->y_num) ?
+		(x_line < data->x_num) : false;
+}
+
 /* +  Vendor specific helper functions */
 static int mxt_xy_to_node(struct mxt_data *data)
 {
@@ -42,9 +50,9 @@ static int mxt_xy_to_node(struct mxt_data *data)
 
 	/* cmd_param[0][1] : [x][y] */
 	if (sysfs_data->cmd_param[0] < 0
-		|| sysfs_data->cmd_param[0] >= data->info.matrix_xsize
+		|| sysfs_data->cmd_param[0] >= data->x_num
 		|| sysfs_data->cmd_param[1] < 0
-		|| sysfs_data->cmd_param[1] >= data->info.matrix_ysize) {
+		|| sysfs_data->cmd_param[1] >= data->y_num) {
 		snprintf(buff, sizeof(buff) , "%s", "NG");
 		set_cmd_result(sysfs_data, buff, strnlen(buff, sizeof(buff)));
 		sysfs_data->cmd_state = CMD_STATUS_FAIL;
@@ -63,7 +71,7 @@ static int mxt_xy_to_node(struct mxt_data *data)
 	 *  v
 	 *  x number
 	 */
-	node = sysfs_data->cmd_param[0] * data->info.matrix_ysize
+	node = sysfs_data->cmd_param[0] * data->y_num
 			+ sysfs_data->cmd_param[1];
 
 	dev_info(&client->dev, "%s: node = %d\n", __func__, node);
@@ -75,8 +83,8 @@ static void mxt_node_to_xy(struct mxt_data *data, u16 *x, u16 *y)
 	struct i2c_client *client = data->client;
 	struct mxt_data_sysfs *sysfs_data = data->sysfs_data;
 
-	*x = sysfs_data->delta_max_node / data->info.matrix_ysize;
-	*y = sysfs_data->delta_max_node % data->info.matrix_ysize;
+	*x = sysfs_data->delta_max_node / data->y_num;
+	*y = sysfs_data->delta_max_node % data->y_num;
 
 	dev_info(&client->dev, "%s: node[%d] is X,Y=%d,%d\n", __func__,
 		sysfs_data->delta_max_node, *x, *y);
@@ -210,14 +218,15 @@ static void mxt_treat_dbg_data(struct mxt_data *data,
 			DATA_PER_NODE, data_buffer);
 
 		sysfs_data->reference[num] =
-			((u16)data_buffer[1]<<8) + (u16)data_buffer[0];
+			((u16)data_buffer[1] << 8) + (u16)data_buffer[0]
+			- REF_OFFSET_VALUE;
 
 		/* check that reference is in spec or not */
 		if (sysfs_data->reference[num] < REF_MIN_VALUE
 			|| sysfs_data->reference[num] > REF_MAX_VALUE) {
-			dev_err(&client->dev,
-				"reference[%d] is out of range = %d\n",
-				num, sysfs_data->reference[num]);
+			dev_err(&client->dev, "reference[%d] is out of range = %d(%d,%d)\n",
+				num, sysfs_data->reference[num],
+				num / data->y_num, num % data->y_num);
 		}
 
 		if (sysfs_data->reference[num] > sysfs_data->ref_max_data)
@@ -238,7 +247,7 @@ static int mxt_read_all_diagnostic_data(struct mxt_data *data, u8 dbg_mode)
 	struct mxt_data_sysfs *sysfs_data = data->sysfs_data;
 	struct mxt_object *dbg_object;
 	u8 read_page, cur_page, end_page, read_point;
-	u16 node, num = 0;
+	u16 node, num = 0,  cnt = 0;
 	int ret = 0;
 
 	/* to make the Page Num to 0 */
@@ -272,9 +281,12 @@ static int mxt_read_all_diagnostic_data(struct mxt_data *data, u8 dbg_mode)
 		for (node = 0; node < NODE_PER_PAGE; node++) {
 			read_point = (node * DATA_PER_NODE) + 2;
 
-			mxt_treat_dbg_data(data, dbg_object, dbg_mode,
-				read_point, num);
-			num++;
+			if (check_xy_range(data, cnt)) {
+				mxt_treat_dbg_data(data, dbg_object, dbg_mode,
+					read_point, num);
+				num++;
+			}
+			cnt++;
 		}
 		ret = mxt_set_diagnostic_mode(data, MXT_DIAG_PAGE_UP);
 		if (ret)
@@ -719,7 +731,7 @@ static void get_x_num(void *device_data)
 	int val;
 
 	set_default_result(sysfs_data);
-	val = data->info.matrix_xsize;
+	val = data->x_num;
 	if (val < 0) {
 		snprintf(buff, sizeof(buff), "%s", "NG");
 		set_cmd_result(sysfs_data, buff, strnlen(buff, sizeof(buff)));
@@ -748,7 +760,7 @@ static void get_y_num(void *device_data)
 	int val;
 
 	set_default_result(sysfs_data);
-	val = data->info.matrix_ysize;
+	val = data->y_num;
 	if (val < 0) {
 		snprintf(buff, sizeof(buff), "%s", "NG");
 		set_cmd_result(sysfs_data, buff, strnlen(buff, sizeof(buff)));

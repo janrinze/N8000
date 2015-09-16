@@ -16,7 +16,7 @@
 struct mmc_cid {
 	unsigned int		manfid;
 	char			prod_name[8];
-	unsigned short          prod_rev;
+	unsigned short		prod_rev;
 	unsigned int		serial;
 	unsigned short		oemid;
 	unsigned short		year;
@@ -210,6 +210,7 @@ struct mmc_card {
 #define MMC_QUIRK_BLK_NO_CMD23	(1<<7)		/* Avoid CMD23 for regular multiblock */
 /* MoviNAND secure issue */
 #define MMC_QUIRK_MOVINAND_SECURE (1<<8)
+#define MMC_QUIRK_MOVINAND_TLC	(1<<31)		/* Check the moviNAND TLC */
 
 	unsigned int    poweroff_notify_state;	/* eMMC4.5 notify feature */
 #define MMC_NO_POWER_NOTIFICATION	0
@@ -249,6 +250,7 @@ struct mmc_card {
 	unsigned int		movi_fwdate;
 };
 
+#define MMC_MOVI_VER_VHX2	(1<<3)
 #define MMC_MOVI_VER_VHX0	(1<<4)
 #define MMC_MOVI_VER_VMX0	(1<<5)
 /*

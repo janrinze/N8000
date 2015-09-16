@@ -39,12 +39,12 @@
 #include <linux/types.h>
 #include <linux/limits.h>
 
-
 extern struct bus_type cyttsp4_bus_type;
 
 struct cyttsp4_driver;
 struct cyttsp4_device;
 struct cyttsp4_adapter;
+struct cyttsp4_touch_firmware;
 
 enum cyttsp4_atten_type {
 	CY_ATTEN_IRQ,
@@ -54,6 +54,8 @@ enum cyttsp4_atten_type {
 };
 
 typedef int (*cyttsp4_atten_func) (struct cyttsp4_device *);
+typedef int (*cyttsp4_loader_func) (struct cyttsp4_device *,
+		struct cyttsp4_touch_firmware *);
 
 struct cyttsp4_ops {
 	int (*write)(struct cyttsp4_adapter *dev, u8 addr,
@@ -129,6 +131,9 @@ struct cyttsp4_core_driver {
 			size_t return_buf_size, int timeout);
 	int (*request_stop_wd)(struct cyttsp4_device *ttsp);
 	int (*request_toggle_lowpower)(struct cyttsp4_device *ttsp, u8 mode);
+	int (*set_loader)(struct cyttsp4_device *ttsp,
+		cyttsp4_loader_func func);
+	int (*unset_loader)(struct cyttsp4_device *ttsp);
 	int (*write)(struct cyttsp4_device *ttsp, int mode,
 		u8 addr, const void *buf, int size);
 	int (*read)(struct cyttsp4_device *ttsp, int mode,
@@ -290,6 +295,21 @@ static inline int cyttsp4_request_toggle_lowpower(struct cyttsp4_device *ttsp,
 	struct cyttsp4_core *cd = ttsp->core;
 	struct cyttsp4_core_driver *d = to_cyttsp4_core_driver(cd->dev.driver);
 	return d->request_toggle_lowpower(ttsp, mode);
+}
+
+static inline int cyttsp4_set_loader(struct cyttsp4_device *ttsp,
+		cyttsp4_loader_func func)
+{
+	struct cyttsp4_core *cd = ttsp->core;
+	struct cyttsp4_core_driver *d = to_cyttsp4_core_driver(cd->dev.driver);
+	return d->set_loader(ttsp, func);
+}
+
+static inline int cyttsp4_unset_loader(struct cyttsp4_device *ttsp)
+{
+	struct cyttsp4_core *cd = ttsp->core;
+	struct cyttsp4_core_driver *d = to_cyttsp4_core_driver(cd->dev.driver);
+	return d->unset_loader(ttsp);
 }
 
 #endif /* _LINUX_CYTTSP4_BUS_H */

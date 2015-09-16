@@ -25,8 +25,8 @@
 #include <linux/if_arp.h>
 #include <linux/platform_device.h>
 #include <linux/kallsyms.h>
-#include <linux/platform_data/modem.h>
 
+#include <linux/platform_data/modem.h>
 #include "modem_prj.h"
 #include "modem_link_device_pld.h"
 #include "modem_utils.h"
@@ -44,12 +44,12 @@ static void qc_dload_task(unsigned long data);
 static void qc_init_boot_map(struct pld_link_device *pld)
 {
 	struct qc_dpram_boot_map *qbt_map = &pld->qc_bt_map;
-	struct modemlink_dpram_control *dpctl = pld->dpctl;
+	struct modemlink_dpram_data *dpram = pld->dpram;
 
 	qbt_map->buff = pld->dev[0]->txq.buff;
-	qbt_map->frame_size = (u16 *)(pld->base + dpctl->boot_size_offset);
-	qbt_map->tag = (u16 *)(pld->base + dpctl->boot_tag_offset);
-	qbt_map->count = (u16 *)(pld->base + dpctl->boot_count_offset);
+	qbt_map->frame_size = (u16 *)(pld->base + dpram->boot_size_offset);
+	qbt_map->tag = (u16 *)(pld->base + dpram->boot_tag_offset);
+	qbt_map->count = (u16 *)(pld->base + dpram->boot_count_offset);
 
 	tasklet_init(&pld->dl_tsk, qc_dload_task, (unsigned long)pld);
 }
@@ -57,7 +57,7 @@ static void qc_init_boot_map(struct pld_link_device *pld)
 static void qc_dload_map(struct pld_link_device *pld, u8 is_upload)
 {
 	struct qc_dpram_boot_map *qbt_map = &pld->qc_bt_map;
-	struct modemlink_dpram_control *dpctl = pld->dpctl;
+	struct modemlink_dpram_data *dpram = pld->dpram;
 	unsigned int upload_offset = 0;
 
 	if (is_upload == 1)	{
@@ -69,12 +69,11 @@ static void qc_dload_map(struct pld_link_device *pld, u8 is_upload)
 	}
 
 	qbt_map->frame_size = (u16 *)(pld->base +
-			dpctl->boot_size_offset + upload_offset);
+			dpram->boot_size_offset + upload_offset);
 	qbt_map->tag = (u16 *)(pld->base +
-			dpctl->boot_tag_offset + upload_offset);
+			dpram->boot_tag_offset + upload_offset);
 	qbt_map->count = (u16 *)(pld->base +
-			dpctl->boot_count_offset + upload_offset);
-
+			dpram->boot_count_offset + upload_offset);
 }
 
 static int qc_prepare_download(struct pld_link_device *pld)
@@ -85,8 +84,8 @@ static int qc_prepare_download(struct pld_link_device *pld)
 	qc_dload_map(pld, 0);
 
 	while (1) {
-		if (pld->udl_check.copy_start) {
-			pld->udl_check.copy_start = 0;
+		if (pld->qc_udl_check.copy_start) {
+			pld->qc_udl_check.copy_start = 0;
 			break;
 		}
 
@@ -103,11 +102,11 @@ static int qc_prepare_download(struct pld_link_device *pld)
 }
 
 static void _qc_do_download(struct pld_link_device *pld,
-			struct dpram_udl_param *param)
+			struct qc_dpram_udl_param *param)
 {
 	struct qc_dpram_boot_map *qbt_map = &pld->qc_bt_map;
 
-	if (param->size <= pld->dpctl->max_boot_frame_size) {
+	if (param->size <= pld->dpram->max_boot_frame_size) {
 		iowrite16(PLD_ADDR_MASK(&qbt_map->buff[0]),
 					pld->address_buffer);
 		memcpy(pld->base, param->addr, param->size);
@@ -137,7 +136,7 @@ static int _qc_download(struct pld_link_device *pld, void *arg,
 	int count = 0;
 	int cnt_limit;
 	unsigned char *img;
-	struct dpram_udl_param param;
+	struct qc_dpram_udl_param param;
 
 	retval = copy_from_user((void *)&param, (void *)arg, sizeof(param));
 	if (retval < 0) {
@@ -153,24 +152,24 @@ static int _qc_download(struct pld_link_device *pld, void *arg,
 	memset(img, 0, param.size);
 	memcpy(img, param.addr, param.size);
 
-	pld->udl_check.total_size = param.size;
-	pld->udl_check.rest_size = param.size;
-	pld->udl_check.send_size = 0;
-	pld->udl_check.copy_complete = 0;
+	pld->qc_udl_check.total_size = param.size;
+	pld->qc_udl_check.rest_size = param.size;
+	pld->qc_udl_check.send_size = 0;
+	pld->qc_udl_check.copy_complete = 0;
 
-	pld->udl_param.addr = img;
-	pld->udl_param.size = pld->dpctl->max_boot_frame_size;
+	pld->qc_udl_param.addr = img;
+	pld->qc_udl_param.size = pld->dpram->max_boot_frame_size;
 	if (tag == QC_DLOAD_TAG_NV)
-		pld->udl_param.count = 1;
+		pld->qc_udl_param.count = 1;
 	else
-		pld->udl_param.count = param.count;
-	pld->udl_param.tag = tag;
+		pld->qc_udl_param.count = param.count;
+	pld->qc_udl_param.tag = tag;
 
-	if (pld->udl_check.rest_size < pld->dpctl->max_boot_frame_size)
-		pld->udl_param.size = pld->udl_check.rest_size;
+	if (pld->qc_udl_check.rest_size < pld->dpram->max_boot_frame_size)
+		pld->qc_udl_param.size = pld->qc_udl_check.rest_size;
 
 	/* Download image (binary or NV) */
-	_qc_do_download(pld, &pld->udl_param);
+	_qc_do_download(pld, &pld->qc_udl_param);
 
 	/* Wait for completion
 	*/
@@ -180,8 +179,8 @@ static int _qc_download(struct pld_link_device *pld, void *arg,
 		cnt_limit = 1000;
 
 	while (1) {
-		if (pld->udl_check.copy_complete) {
-			pld->udl_check.copy_complete = 0;
+		if (pld->qc_udl_check.copy_complete) {
+			pld->qc_udl_check.copy_complete = 0;
 			retval = 0;
 			break;
 		}
@@ -215,30 +214,30 @@ static void qc_dload_task(unsigned long data)
 {
 	struct pld_link_device *pld = (struct pld_link_device *)data;
 
-	pld->udl_check.send_size += pld->udl_param.size;
-	pld->udl_check.rest_size -= pld->udl_param.size;
+	pld->qc_udl_check.send_size += pld->qc_udl_param.size;
+	pld->qc_udl_check.rest_size -= pld->qc_udl_param.size;
 
-	pld->udl_param.addr += pld->udl_param.size;
+	pld->qc_udl_param.addr += pld->qc_udl_param.size;
 
-	if (pld->udl_check.send_size >= pld->udl_check.total_size) {
-		pld->udl_check.copy_complete = 1;
-		pld->udl_param.tag = 0;
+	if (pld->qc_udl_check.send_size >= pld->qc_udl_check.total_size) {
+		pld->qc_udl_check.copy_complete = 1;
+		pld->qc_udl_param.tag = 0;
 		return;
 	}
 
-	if (pld->udl_check.rest_size < pld->dpctl->max_boot_frame_size)
-		pld->udl_param.size = pld->udl_check.rest_size;
+	if (pld->qc_udl_check.rest_size < pld->dpram->max_boot_frame_size)
+		pld->qc_udl_param.size = pld->qc_udl_check.rest_size;
 
-	pld->udl_param.count += 1;
+	pld->qc_udl_param.count += 1;
 
-	_qc_do_download(pld, &pld->udl_param);
+	_qc_do_download(pld, &pld->qc_udl_param);
 }
 
 static void qc_dload_cmd_handler(struct pld_link_device *pld, u16 cmd)
 {
 	switch (cmd) {
 	case 0x1234:
-		pld->udl_check.copy_start = 1;
+		pld->qc_udl_check.copy_start = 1;
 		break;
 
 	case 0xDBAB:
@@ -247,7 +246,7 @@ static void qc_dload_cmd_handler(struct pld_link_device *pld, u16 cmd)
 
 	case 0xABCD:
 		mif_info("[%s] booting Start\n", pld->ld.name);
-		pld->udl_check.boot_complete = 1;
+		pld->qc_udl_check.boot_complete = 1;
 		break;
 
 	default:
@@ -265,8 +264,8 @@ static int qc_boot_start(struct pld_link_device *pld)
 	pld->send_intr(pld, mask);
 
 	while (1) {
-		if (pld->udl_check.boot_complete) {
-			pld->udl_check.boot_complete = 0;
+		if (pld->qc_udl_check.boot_complete) {
+			pld->qc_udl_check.boot_complete = 0;
 			break;
 		}
 
@@ -334,7 +333,7 @@ static void qc_crash_log(struct pld_link_device *pld)
 }
 
 static int _qc_data_upload(struct pld_link_device *pld,
-			struct dpram_udl_param *param)
+			struct qc_dpram_udl_param *param)
 {
 	struct qc_dpram_boot_map *qbt_map = &pld->qc_bt_map;
 	int retval = 0;
@@ -342,7 +341,7 @@ static int _qc_data_upload(struct pld_link_device *pld,
 	int count = 0;
 
 	while (1) {
-		if (!gpio_get_value(pld->gpio_dpram_int)) {
+		if (!gpio_get_value(pld->gpio_ipc_int2ap)) {
 			intval = pld->recv_intr(pld);
 			if (intval == 0xDBAB) {
 				break;
@@ -396,7 +395,7 @@ static int qc_uload_step1(struct pld_link_device *pld)
 	mif_info("+---------------------------------------------+\n");
 
 	while (1) {
-		if (!gpio_get_value(pld->gpio_dpram_int)) {
+		if (!gpio_get_value(pld->gpio_ipc_int2ap)) {
 			intval = pld->recv_intr(pld);
 			mif_info("intr 0x%04x\n", intval);
 			if (intval == 0x1234) {
@@ -428,7 +427,7 @@ static int qc_uload_step1(struct pld_link_device *pld)
 static int qc_uload_step2(struct pld_link_device *pld, void *arg)
 {
 	int retval = 0;
-	struct dpram_udl_param param;
+	struct qc_dpram_udl_param param;
 
 	retval = copy_from_user((void *)&param, (void *)arg, sizeof(param));
 	if (retval < 0) {
